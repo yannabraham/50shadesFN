@@ -11,6 +11,7 @@ Data is converted using the following commands:
 ```
 ogr2ogr -f GeoJSON departements\departements-20140306-100m.json
   -where "code_insee not in ('976','973','972','971','974')"
+  -lco ENCODING=UTF-8
   departements\departements-20140306-100m.shp
 ```
 
