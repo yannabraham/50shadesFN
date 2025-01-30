@@ -1,89 +1,111 @@
-library(plyr)
-library(reshape)
-library(stringr)
+library(tidyverse)
 library(rjson)
 
 # read all 1st tour data from resultats
-files <- dir('resultats',pattern='csv')
-files <- files[str_detect(files,'t1_')]
+(files <- dir('resultats',
+              pattern='csv',
+              full.names = TRUE))
+(files <- str_subset(files,'t1_'))
 
-dta <- lapply(files,function(x) {
-		print(x)
-		res <- read.csv(file.path('resultats',x))
-		if(str_detect(x,'ag')) {
-			res <- res[,c('Code.dÃ.partement','DÃ.partement','ExprimÃ.s','Front.national')]
-			names(res) <- c('code_insee','departement','votes','FN')
-			res <- ddply(res,.(code_insee,departement),summarize,
-				FN=sum(FN,na.rm=T)/sum(votes)
-			)
-		} else {
-			if(str_detect(x,'t2015t')) {
-				nuance <- res[,c('Code.du.département','Libellé.du.département','Exprimés',
-						colnames(res)[str_detect(colnames(res),'Nuance')])]
-				nuance <- melt(nuance,id.var=c('Code.du.département','Libellé.du.département','Exprimés'))
-				levels(nuance$variable) <- sapply(levels(nuance$variable),
-					function(x) {
-						ncn <- as.numeric(str_split(x,'Nuance')[[1]][2])
-						ncn[is.na(ncn)] <- 0
-						return(1+ncn)
-					}
-				)
-				names(nuance) <- c('code_insee','departement','votes','variable','nuance')
-				voix <- res[,c('Code.du.département','Exprimés',
-						colnames(res)[str_detect(colnames(res),'^Voix')])]
-				voix <- melt(voix,id.var=c('Code.du.département','Exprimés'))
-				levels(voix$variable) <- sapply(levels(voix$variable),
-					function(x) {
-						ncn <- as.numeric(str_split(x,'Voix')[[1]][2])
-						ncn[is.na(ncn)] <- 0
-						return(1+ncn)
-					}
-				)
-				names(voix) <- c('code_insee','votes','variable','voix')
-			} else if(str_detect(x,'t2011t')) {
-				nuance <- res[,c('Code.du.dÃ.partement','LibellÃ..du.dÃ.partement','ExprimÃ.s',
-						colnames(res)[str_detect(colnames(res),'Nuance')])]
-				nuance <- melt(nuance,id.var=c('Code.du.dÃ.partement','LibellÃ..du.dÃ.partement','ExprimÃ.s'))
-				levels(nuance$variable) <- sapply(levels(nuance$variable),function(x) str_split(x,'Nuance')[[1]][2])
-				names(nuance) <- c('code_insee','departement','votes','variable','nuance')
-				voix <- res[,c('Code.du.dÃ.partement','ExprimÃ.s',
-						colnames(res)[str_detect(colnames(res),'Voix')])]
-				voix <- melt(voix,id.var=c('Code.du.dÃ.partement','ExprimÃ.s'))
-				levels(voix$variable) <- sapply(levels(voix$variable),function(x) str_split(x,'Voix')[[1]][2])
-				names(voix) <- c('code_insee','votes','variable','voix')
-			} else {
-				nuance <- res[,c('Code.dÃ.partement','DÃ.partement','ExprimÃ.s',
-						colnames(res)[str_detect(colnames(res),'Nuance')])]
-				nuance <- melt(nuance,id.var=c('Code.dÃ.partement','DÃ.partement','ExprimÃ.s'))
-				levels(nuance$variable) <- sapply(levels(nuance$variable),function(x) str_split(x,'\\.')[[1]][2])
-				names(nuance) <- c('code_insee','departement','votes','variable','nuance')
-				voix <- res[,c('Code.dÃ.partement','ExprimÃ.s',
-						colnames(res)[str_detect(colnames(res),'Voix')])]
-				voix <- melt(voix,id.var=c('Code.dÃ.partement','ExprimÃ.s'))
-				levels(voix$variable) <- sapply(levels(voix$variable),function(x) str_split(x,'\\.')[[1]][2])
-				names(voix) <- c('code_insee','votes','variable','voix')
-			}
-			res <- merge(nuance,voix)
-			res <- subset(res,!is.na(voix))
-			res <- subset(res,nuance=='FN')
-			res <- ddply(res,.(code_insee,departement),summarize,
-				FN=sum(voix,na.rm=T)/sum(votes)
-			)
-		}
-		levels(res$code_insee) <- sapply(levels(res$code_insee),function(ci) {
-				if(nchar(ci)==1) {
-					return(sprintf('%02i',as.numeric(ci)))
-				} else {
-					return(ci)
-				}
-			}
-		)
-		res$annee <- str_extract(x,'[0-9]{4,}')
-		return(res)
-	}
-)
-dta <- do.call('rbind',dta)
-dta <- subset(dta,!is.na(FN))
+df_agg <- lapply(str_subset(files,'-ag'),function(x) {
+  print(x)
+  readr::read_csv(x)%>% 
+    select(code_insee = `Code dÃ©partement`,
+           departement = DÃ©partement,
+           votes = ExprimÃ©s,
+           FN = `Front national`) %>% 
+    mutate(annee = str_extract(x,"[0-9]{4}"),
+           across(all_of(c("code_insee","departement")),
+                  factor),
+           across(all_of(c("votes","FN")),
+                  as.numeric)) %>% 
+    arrange(code_insee,votes)
+})
+df_agg <- bind_rows(df_agg)
+
+df_full <- lapply(str_subset(files,'(-ag)|(-moderne)',negate = TRUE),function(x) {
+  print(x)
+  readr::read_csv(x) %>% 
+    select(code_insee = matches("Code (du ){0,1}dÃ©partement"),
+           code_canton = matches("Code (du ){0,1}canton"),
+           departement = matches("^(LibellÃ© du ){0,1}[Dd]Ã©partement"),
+           votes = ExprimÃ©s,
+           matches("(Nuance)|(Voix)")) %>% 
+    gather(var,val,-c(code_insee, departement, code_canton, votes)) %>% 
+    mutate(i = str_extract(var,"[0-9]{1,}"),
+           var = str_replace_all(var,"[0-9]",""),
+           var = str_replace_all(var,"\\.",""),
+           var = str_replace_all(var,"Liste",""),
+           var = str_trim(var)) %>% 
+    spread(var,val) %>% 
+    filter(Nuance=="FN") %>% 
+    select(code_insee,
+           departement,
+           votes,
+           FN = Voix) %>% 
+    mutate(annee = str_extract(x,"[0-9]{4}"),
+           code_insee = str_pad(code_insee,
+                                width = 2,
+                                side = "left",
+                                pad = "0"),
+           across(all_of(c("code_insee","departement")),
+                  factor),
+           across(all_of(c("votes","FN")),
+                  as.numeric)) %>% 
+    arrange(code_insee,votes)
+})
+df_full <- bind_rows(df_full)
+
+df_moderne <- lapply(str_subset(files,"-moderne"),function(x) {
+  print(x)
+  readr::read_csv(x) %>% 
+    select(code_insee = matches("Code (du ){0,1}dÃ©partement"),
+           code_canton = matches("Code (du ){0,1}canton"),
+           departement = matches("^(LibellÃ© du ){0,1}[Dd]Ã©partement"),
+           votes = ExprimÃ©s,
+           matches("(^Nuance)|(^Voix)")) %>% 
+    gather(var,val,-any_of(c("code_insee", 
+                             "departement", 
+                             "code_canton", 
+                             "votes"))) %>% 
+    mutate(i = str_extract(var,"[0-9]{1,}"),
+           i = as.numeric(i),
+           var = str_replace_all(var,"[0-9]",""),
+           var = str_replace_all(var,"\\.",""),
+           var = str_replace_all(var,"Liste",""),
+           var = str_trim(var)) %>% 
+    group_by(pick(any_of(c("code_insee","code_canton")))) %>%
+    arrange(i) %>% 
+    mutate(i = rep(seq(n()/2),each = 2)) %>% 
+    ungroup() %>% 
+    spread(var,val) %>% 
+    filter(str_detect(Nuance,"[FR]N")) %>% 
+    select(code_insee,
+           departement,
+           votes,
+           FN = Voix) %>% 
+    mutate(annee = str_extract(x,"[0-9]{4}"),
+           code_insee = str_pad(code_insee,
+                                width = 2,
+                                side = "left",
+                                pad = "0"),
+           departement = str_to_upper(departement),
+           across(all_of(c("code_insee","departement")),
+                  factor),
+           across(all_of(c("votes","FN")),
+                  as.numeric)) %>% 
+    arrange(code_insee,votes)
+})
+df_moderne <- bind_rows(df_moderne)
+
+dta <- bind_rows(list(df_agg,
+                      df_full,
+                      df_moderne)) %>% 
+  filter(!is.na(FN),
+         !is.na(votes)) %>% 
+  group_by(annee,code_insee) %>% 
+  summarize(FN = sum(FN)/sum(votes))
+
 dta <- droplevels(dta)
 
 final <- split(dta,dta$annee)
